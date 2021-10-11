@@ -163,17 +163,17 @@ defmodule Actor do
 
       def start_all() do
         all_actors = all()
-        Enum.each(all_actors, &Actor.start(&1.uuid))
+        Enum.each(all_actors, &Actor.start(&1))
       end
 
       def stop_all() do
         all_actors = all()
-        Enum.each(all_actors, &Actor.stop(&1.uuid))
+        Enum.each(all_actors, &Actor.stop(&1))
       end
 
       def delete_all() do
         all_actors = all()
-        Enum.each(all_actors, &Actor.delete(&1.uuid))
+        Enum.each(all_actors, &Actor.delete(&1))
       end
 
       defp log(state, line) do
