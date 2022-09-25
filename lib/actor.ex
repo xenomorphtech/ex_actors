@@ -1,4 +1,34 @@
 defmodule Actor do
+  _to_work_later = """
+  @on_load :load_check
+  def load_check() do
+    # :timer.sleep(1000)
+    IO.inspect "loading"
+
+    Enum.each(__MODULE__.all(), fn x ->
+      pid = Actor.pid(x)
+      IO.inspect({x, pid})
+      !!pid && send(pid, :code_update)
+    end)
+
+    :ok
+  end
+
+  @after_compile {__MODULE__, :after_compile}
+  def after_compile(_, _) do
+    # :timer.sleep(1000)
+    IO.inspect "loading"
+
+    Enum.each(__MODULE__.all(), fn x ->
+      pid = Actor.pid(x)
+      IO.inspect({x, pid})
+      !!pid && send(pid, :code_update)
+    end)
+
+    :ok
+  end
+  """
+
   def pid(uuid) do
     case :pg.get_local_members(PGActorUuid, uuid) do
       [] -> nil
@@ -102,12 +132,16 @@ defmodule Actor do
         tick_interval = Map.get(state, :tick_interval, 1000)
 
         receive do
+          :code_update ->
+            IO.inspect("got updated")
+            __MODULE__.loop_flush_messages(state)
+
           {ActorMsg, :update, new_state} ->
             state = MnesiaKV.merge_nested(state, new_state)
-            loop_flush_messages(state)
+            __MODULE__.loop_flush_messages(state)
 
           msg ->
-            loop_flush_messages(message(msg, state))
+            __MODULE__.loop_flush_messages(message(msg, state))
         after
           tick_interval ->
             state
@@ -278,6 +312,10 @@ defmodule ActorSupervisor do
 
         flush_messages(state)
 
+      {:mnesia_kv_event, :new, Actor, uuid, _map, _map} ->
+        :ets.insert(state.spawn_queue_ets, {{0, uuid}})
+        flush_messages(state)
+
       {:mnesia_kv_event, :new, Actor, uuid, _map} ->
         :ets.insert(state.spawn_queue_ets, {{0, uuid}})
         flush_messages(state)
@@ -288,24 +326,32 @@ defmodule ActorSupervisor do
         flush_messages(state)
 
       {:mnesia_kv_event, :delete, Actor, uuid} ->
-        :ets.match_delete(state.spawn_queue_ets, {:_, uuid})
+        proc_delete(uuid)
+        flush_messages(state)
 
-        pid = get_pid(state.uuid_pid_ets, uuid)
-        :ets.delete(state.uuid_pid_ets, uuid)
-
-        if pid do
-          :ets.delete(state.uuid_pid_ets, pid)
-          Process.exit(pid, :kill)
-        end
-
+      {:mnesia_kv_event, :delete, Actor, uuid, _deleted_value} ->
+        proc_delete(uuid)
         flush_messages(state)
 
       # ignore the rest
-      _ ->
+      ignored ->
+        IO.puts("ex_actors: warning, ignoring message #{inspect(ignored)}")
         flush_messages(state)
     after
       0 ->
         :done
+    end
+  end
+
+  defp proc_delete(uuid) do
+    :ets.match_delete(state.spawn_queue_ets, {:_, uuid})
+
+    pid = get_pid(state.uuid_pid_ets, uuid)
+    :ets.delete(state.uuid_pid_ets, uuid)
+
+    if pid do
+      :ets.delete(state.uuid_pid_ets, pid)
+      Process.exit(pid, :kill)
     end
   end
 
