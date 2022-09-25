@@ -326,11 +326,11 @@ defmodule ActorSupervisor do
         flush_messages(state)
 
       {:mnesia_kv_event, :delete, Actor, uuid} ->
-        proc_delete(uuid)
+        proc_delete(state, uuid)
         flush_messages(state)
 
       {:mnesia_kv_event, :delete, Actor, uuid, _deleted_value} ->
-        proc_delete(uuid)
+        proc_delete(state, uuid)
         flush_messages(state)
 
       # ignore the rest
@@ -343,7 +343,7 @@ defmodule ActorSupervisor do
     end
   end
 
-  defp proc_delete(uuid) do
+  defp proc_delete(state, uuid) do
     :ets.match_delete(state.spawn_queue_ets, {:_, uuid})
 
     pid = get_pid(state.uuid_pid_ets, uuid)
