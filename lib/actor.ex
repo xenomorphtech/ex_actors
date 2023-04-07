@@ -249,9 +249,12 @@ defmodule ActorSupervisor do
         pid -> monitor_actor(uuid_pid_ets, uuid, pid)
       end
     end)
+    
+    app_name = args[:app_name] || get_app_name()
 
     loop(%{uuid_pid_ets: uuid_pid_ets, spawn_queue_ets: spawn_queue_ets, 
       log_console: args[:log_console] || true, log_file: args[:log_file] || true,
+      app_name: app_name
     })
   end
 
@@ -287,7 +290,7 @@ defmodule ActorSupervisor do
         msg = "#{time} actor deleted #{uuid}\n"
            
         state.log_console && IO.binwrite(msg)
-        state.log_file && File.write!("/tmp/#{get_app_name()}/error_actor_unhandled", msg, [:append])
+        state.log_file && File.write!("/tmp/#{state.app_name}/error_actor_unhandled", msg, [:append])
 
         flush_messages(state)
 
@@ -297,7 +300,7 @@ defmodule ActorSupervisor do
           msg = "#{time} #{inspect(reason, pretty: true, limit: 9_999_999)}\n"
           
           state.log_console && IO.binwrite(msg)
-          state.log_file && File.write!("/tmp/#{get_app_name()}/error_actor_unhandled", msg, [:append])
+          state.log_file && File.write!("/tmp/#{state.app_name}/error_actor_unhandled", msg, [:append])
         end
 
         uuid = get_uuid(state.uuid_pid_ets, pid)
