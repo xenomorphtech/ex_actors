@@ -30,7 +30,7 @@ defmodule Actor do
   """
 
   def pid(uuid) do
-    case :pg.get_local_members(PGActorUuid, uuid) do
+    case :pg.get_local_members(PGActorUUID, uuid) do
       [] -> nil
       [pid] -> pid
     end
@@ -100,7 +100,8 @@ defmodule Actor do
 
       def init(state) do
         pid = self()
-        :pg.join(PGActorUuid, state.uuid, pid)
+        :pg.join(PGActorUUID, state.uuid, pid)
+        :pg.join(PGActorUUID, {state.mod, state.uuid}, pid)
         :pg.join(PGActorAll, pid)
 
         if state[:name] do
@@ -133,7 +134,6 @@ defmodule Actor do
 
         receive do
           :code_update ->
-            IO.inspect("got updated")
             __MODULE__.loop_flush_messages(state)
 
           {ActorMsg, :update, new_state} ->
@@ -163,15 +163,15 @@ defmodule Actor do
       def call(uuid_or_module, params, timeout \\ 8_000) do
         pid =
           if is_binary(uuid_or_module) do
-            case :pg.get_local_members(PGActorUuid, uuid_or_module) do
-              [] -> %{error: :pid_dead}
+            case :pg.get_local_members(PGActorUUID, uuid_or_module) do
               [pid] -> pid
+              [] -> %{error: :pid_dead}
               [_ | _] -> %{error: :pid_has_many}
             end
           else
             case :pg.get_local_members(PGActorName, uuid_or_module) do
-              [] -> %{error: :pid_dead}
               [pid] -> pid
+              [] -> %{error: :pid_dead}
               [_ | _] -> %{error: :pid_has_many}
             end
           end
@@ -213,12 +213,12 @@ defmodule Actor do
       defp log(state, line) do
         time = String.slice("#{NaiveDateTime.utc_now()}", 0..-4)
         mod = "#{__MODULE__}" |> String.trim("Elixir.")
-        IO.inspect("#{time} #{mod} | #{line}")
+        IO.puts("#{time} #{mod} | #{line}")
       end
 
       defp log(line) do
         time = String.slice("#{NaiveDateTime.utc_now()}", 0..-4)
-        IO.inspect("#{time} | #{line}")
+        IO.puts("#{time} | #{line}")
       end
 
       # defoverridable new: 1
@@ -230,15 +230,15 @@ defmodule Actor do
 end
 
 defmodule ActorSupervisor do
-  def start_link() do
-    pid = :erlang.spawn_opt(__MODULE__, :init, [], [:link, {:min_heap_size, 1024}])
+  def start_link(args) do
+    pid = :erlang.spawn_opt(__MODULE__, :init, [args], [:link, {:min_heap_size, 256}])
     :erlang.register(__MODULE__, pid)
     {:ok, pid}
   end
 
-  def init() do
+  def init(args) do
     IO.inspect("Starting #{__MODULE__}..")
-    Process.sleep(1000)
+    Process.sleep(100)
     MnesiaKV.subscribe(Actor)
     uuid_pid_ets = :ets.new(:uuid_pid, [:set])
     spawn_queue_ets = :ets.new(:spawn_queue, [:ordered_set])
@@ -250,7 +250,9 @@ defmodule ActorSupervisor do
       end
     end)
 
-    loop(%{uuid_pid_ets: uuid_pid_ets, spawn_queue_ets: spawn_queue_ets})
+    loop(%{uuid_pid_ets: uuid_pid_ets, spawn_queue_ets: spawn_queue_ets, 
+      log_console: args[:log_console] || true, log_file: args[:log_file] || true,
+    })
   end
 
   defp monitor_actor(uuid_pid_ets, uuid, pid) do
@@ -282,26 +284,20 @@ defmodule ActorSupervisor do
         Actor.delete(uuid)
 
         time = String.slice("#{NaiveDateTime.utc_now()}", 0..-4)
-
-        File.write!(
-          "/tmp/#{get_app_name()}/error_actor_unhandled",
-          "#{time} actor deleted #{uuid}\n",
-          [
-            :append
-          ]
-        )
+        msg = "#{time} actor deleted #{uuid}\n"
+           
+        state.log_console && IO.binwrite(msg)
+        state.log_file && File.write!("/tmp/#{get_app_name()}/error_actor_unhandled", msg, [:append])
 
         flush_messages(state)
 
       {:DOWN, _ref, :process, pid, reason} ->
         if reason != :normal do
           time = String.slice("#{NaiveDateTime.utc_now()}", 0..-4)
-
-          File.write!(
-            "/tmp/#{get_app_name()}/error_actor_unhandled",
-            time <> " " <> inspect(reason, pretty: true, limit: 9_999_999) <> "\n",
-            [:append]
-          )
+          msg = "#{time} #{inspect(reason, pretty: true, limit: 9_999_999)}\n"
+          
+          state.log_console && IO.binwrite(msg)
+          state.log_file && File.write!("/tmp/#{get_app_name()}/error_actor_unhandled", msg, [:append])
         end
 
         uuid = get_uuid(state.uuid_pid_ets, pid)
@@ -316,17 +312,9 @@ defmodule ActorSupervisor do
         :ets.insert(state.spawn_queue_ets, {{0, uuid}})
         flush_messages(state)
 
-      {:mnesia_kv_event, :new, Actor, uuid, _map} ->
-        :ets.insert(state.spawn_queue_ets, {{0, uuid}})
-        flush_messages(state)
-
       {:mnesia_kv_event, :merge, Actor, uuid, map, _diff} ->
         pid = get_pid(state.uuid_pid_ets, uuid)
         if pid, do: send(pid, {ActorMsg, :update, map})
-        flush_messages(state)
-
-      {:mnesia_kv_event, :delete, Actor, uuid} ->
-        proc_delete(state, uuid)
         flush_messages(state)
 
       {:mnesia_kv_event, :delete, Actor, uuid, _deleted_value} ->
@@ -412,7 +400,7 @@ defmodule ActorSupervisor do
     end
   end
 
-  def start(dynamic_supervisor) do
+  def start(dynamic_supervisor, args \\ %{}) do
     {:ok, _} =
       DynamicSupervisor.start_child(dynamic_supervisor, %{
         id: PGActorAll,
@@ -421,8 +409,8 @@ defmodule ActorSupervisor do
 
     {:ok, _} =
       DynamicSupervisor.start_child(dynamic_supervisor, %{
-        id: PGActorUuid,
-        start: {:pg, :start_link, [PGActorUuid]}
+        id: PGActorUUID,
+        start: {:pg, :start_link, [PGActorUUID]}
       })
 
     {:ok, _} =
@@ -434,7 +422,7 @@ defmodule ActorSupervisor do
     {:ok, _} =
       DynamicSupervisor.start_child(dynamic_supervisor, %{
         id: ActorSupervisor,
-        start: {ActorSupervisor, :start_link, []}
+        start: {ActorSupervisor, :start_link, [args]}
       })
   end
 end
