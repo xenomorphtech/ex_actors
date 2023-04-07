@@ -1,34 +1,4 @@
 defmodule Actor do
-  _to_work_later = """
-  @on_load :load_check
-  def load_check() do
-    # :timer.sleep(1000)
-    IO.inspect "loading"
-
-    Enum.each(__MODULE__.all(), fn x ->
-      pid = Actor.pid(x)
-      IO.inspect({x, pid})
-      !!pid && send(pid, :code_update)
-    end)
-
-    :ok
-  end
-
-  @after_compile {__MODULE__, :after_compile}
-  def after_compile(_, _) do
-    # :timer.sleep(1000)
-    IO.inspect "loading"
-
-    Enum.each(__MODULE__.all(), fn x ->
-      pid = Actor.pid(x)
-      IO.inspect({x, pid})
-      !!pid && send(pid, :code_update)
-    end)
-
-    :ok
-  end
-  """
-
   def pid(uuid) do
     case :pg.get_local_members(PGActorUUID, uuid) do
       [] -> nil
@@ -298,7 +268,10 @@ defmodule ActorSupervisor do
         msg = "#{time} actor deleted #{uuid}\n"
            
         state.log_console && IO.binwrite(msg)
-        state.log_file && File.write!("/tmp/#{state.app_name}/error_actor_unhandled", msg, [:append])
+        state.log_file && case File.write("/tmp/#{state.app_name}/error_actor_unhandled", msg, [:append]) do
+          :ok -> :ok
+          {:error, :enoent} -> File.mkdir_p!("/tmp/#{state.app_name}/"); File.write!("/tmp/#{state.app_name}/error_actor_unhandled", msg, [:append])
+        end
 
         flush_messages(state)
 
@@ -308,7 +281,10 @@ defmodule ActorSupervisor do
           msg = "#{time} #{inspect(reason, pretty: true, limit: 9_999_999)}\n"
           
           state.log_console && IO.binwrite(msg)
-          state.log_file && File.write!("/tmp/#{state.app_name}/error_actor_unhandled", msg, [:append])
+          state.log_file && case File.write("/tmp/#{state.app_name}/error_actor_unhandled", msg, [:append]) do
+            :ok -> :ok
+            {:error, :enoent} -> File.mkdir_p!("/tmp/#{state.app_name}/"); File.write!("/tmp/#{state.app_name}/error_actor_unhandled", msg, [:append])
+          end
         end
 
         uuid = get_uuid(state.uuid_pid_ets, pid)
