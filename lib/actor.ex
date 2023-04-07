@@ -66,6 +66,13 @@ defmodule Actor do
 
   defmacro __using__(_) do
     quote do
+      @after_verify __MODULE__
+      def __after_verify__(module) do
+        :pg.get_local_members(PGActorAll, module)
+        |> Enum.each(& send(&1, :code_update))
+        :ok
+      end
+
       def new(params \\ %{}) do
         uuid = params[:uuid] || MnesiaKV.uuid()
         args = %{mod: __MODULE__, uuid: uuid}
@@ -102,6 +109,7 @@ defmodule Actor do
         pid = self()
         :pg.join(PGActorUUID, state.uuid, pid)
         :pg.join(PGActorUUID, {state.mod, state.uuid}, pid)
+        :pg.join(PGActorAll, state.mod, pid)
         :pg.join(PGActorAll, pid)
 
         if state[:name] do
