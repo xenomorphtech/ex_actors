@@ -75,7 +75,8 @@ defmodule Actor do
         state
       end
 
-      def init(state) do
+      def init(state, parent) do
+        Process.put(:actor_supervisor, parent)
         pid = self()
         :pg.join(PGActorUUID, state.uuid, pid)
         :pg.join(PGActorUUID, {state.mod, state.uuid}, pid)
@@ -101,7 +102,7 @@ defmodule Actor do
           end
 
         if old_state != new_state do
-          MnesiaKV.merge(Actor, new_state.uuid, new_state, false)
+          MnesiaKV.merge(Actor, new_state.uuid, new_state, [Process.get(:actor_supervisor)])
         end
 
         __MODULE__.loop(new_state)
@@ -116,6 +117,9 @@ defmodule Actor do
 
           {ActorMsg, :update, new_state} ->
             state = MnesiaKV.merge_nested(state, new_state)
+            __MODULE__.loop_flush_messages(state)
+          {ActorMsg, :update_supervisor, pid} ->
+            Process.put(:actor_supervisor, pid)
             __MODULE__.loop_flush_messages(state)
 
           msg ->
@@ -224,7 +228,9 @@ defmodule ActorSupervisor do
     Enum.each(MnesiaKV.keys(Actor), fn uuid ->
       case Actor.pid(uuid) do
         nil -> :ets.insert(spawn_queue_ets, {{0, uuid}})
-        pid -> monitor_actor(uuid_pid_ets, uuid, pid)
+        pid ->
+          send(pid, {ActorMsg, :update_supervisor, self()})
+          monitor_actor(uuid_pid_ets, uuid, pid)
       end
     end)
     
@@ -361,7 +367,7 @@ defmodule ActorSupervisor do
 
       nil ->
         state = MnesiaKV.get(Actor, uuid)
-        {{:ok, pid}, _ref} = :proc_lib.start_monitor(state.mod, :init, [state])
+        {{:ok, pid}, _ref} = :proc_lib.start_monitor(state.mod, :init, [state, self()])
         pid
     end
   end
