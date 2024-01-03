@@ -301,6 +301,10 @@ defmodule ActorSupervisor do
 
         flush_messages(state)
 
+      {:mnesia_kv_event, :new, Actor, uuid, _map} ->
+        :ets.insert(state.spawn_queue_ets, {{0, uuid}})
+        flush_messages(state)
+
       {:mnesia_kv_event, :new, Actor, uuid, _map, _map} ->
         :ets.insert(state.spawn_queue_ets, {{0, uuid}})
         flush_messages(state)
